@@ -1,20 +1,37 @@
 {
-    "name": "videochat-skype",
-    "version": "1.0.0",
-    "description": "Applicazione VideoChat tipo Skype",
-    "main": "server.js",
-    "scripts": {
+  "name": "videochat-skype-multi",
+  "version": "2.0.0",
+  "description": "Applicazione VideoChat Multi-Utente tipo Skype con supporto per video multipli",
+  "main": "server.js",
+  "scripts": {
       "start": "node server.js",
-      "dev": "node server.js"
-    },
-    "keywords": ["videochat", "webrtc", "skype", "socket.io"],
-    "author": "Tu",
-    "license": "MIT",
-    "dependencies": {
+      "dev": "node server.js",
+      "test": "echo \"Nessun test specificato\" && exit 0"
+  },
+  "keywords": [
+      "videochat", 
+      "webrtc", 
+      "skype", 
+      "socket.io", 
+      "multi-user", 
+      "video-conference", 
+      "peer-to-peer"
+  ],
+  "author": "Tu",
+  "license": "MIT",
+  "dependencies": {
       "express": "^4.18.2",
       "socket.io": "^4.7.2"
-    },
-    "engines": {
+  },
+  "engines": {
       "node": ">=14.0.0"
-    }
-  }
+  },
+  "repository": {
+      "type": "git",
+      "url": "https://github.com/tuousername/videochat-skype-multi.git"
+  },
+  "bugs": {
+      "url": "https://github.com/tuousername/videochat-skype-multi/issues"
+  },
+  "homepage": "https://github.com/tuousername/videochat-skype-multi#readme"
+}

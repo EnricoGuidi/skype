@@ -34,7 +34,8 @@ function addUserToRoom(socketId, roomId, userName) {
         roomId: roomId,
         userName: userName,
         videoEnabled: true,
-        audioEnabled: true
+        audioEnabled: true,
+        joinedAt: new Date()
     });
     
     // Aggiungi utente alla stanza
@@ -84,189 +85,336 @@ function getOtherUsersInRoom(roomId, excludeSocketId) {
     return getUsersInRoom(roomId).filter(user => user.socketId !== excludeSocketId);
 }
 
+function broadcastToRoom(roomId, event, data, excludeSocketId = null) {
+    if (!rooms.has(roomId)) return;
+    
+    const roomUsers = Array.from(rooms.get(roomId));
+    roomUsers.forEach(socketId => {
+        if (socketId !== excludeSocketId) {
+            io.to(socketId).emit(event, data);
+        }
+    });
+}
+
 // Gestione delle connessioni Socket.IO
 io.on('connection', (socket) => {
     console.log('🔌 Nuovo utente connesso:', socket.id);
 
     // Entra in una stanza
     socket.on('join-room', (roomId, userName) => {
-        // Lascia eventuali stanze precedenti
-        const previousUser = users.get(socket.id);
-        if (previousUser) {
-            socket.leave(previousUser.roomId);
-            removeUserFromRoom(socket.id);
+        try {
+            // Lascia eventuali stanze precedenti
+            const previousUser = users.get(socket.id);
+            if (previousUser) {
+                socket.leave(previousUser.roomId);
+                removeUserFromRoom(socket.id);
+                
+                // Notifica la vecchia stanza
+                broadcastToRoom(previousUser.roomId, 'user-disconnected', {
+                    socketId: socket.id,
+                    userName: previousUser.userName
+                });
+            }
+            
+            // Validazione input
+            if (!roomId || !userName || roomId.length > 50 || userName.length > 30) {
+                socket.emit('error', { message: 'Dati non validi' });
+                return;
+            }
+            
+            // Entra nella nuova stanza
+            socket.join(roomId);
+            addUserToRoom(socket.id, roomId, userName);
+            
+            // Ottieni altri utenti nella stanza
+            const otherUsers = getOtherUsersInRoom(roomId, socket.id);
+            
+            // Invia la lista degli utenti esistenti al nuovo utente
+            socket.emit('existing-users', otherUsers.map(user => ({
+                socketId: user.socketId,
+                userName: user.userName,
+                videoEnabled: user.videoEnabled,
+                audioEnabled: user.audioEnabled
+            })));
+            
+            // Notifica agli altri utenti del nuovo arrivo
+            broadcastToRoom(roomId, 'user-connected', {
+                socketId: socket.id,
+                userName: userName,
+                videoEnabled: true,
+                audioEnabled: true
+            }, socket.id);
+            
+            console.log(`🏠 ${userName} è entrato nella stanza ${roomId} (${otherUsers.length + 1} utenti totali)`);
+            
+        } catch (error) {
+            console.error('Errore join-room:', error);
+            socket.emit('error', { message: 'Errore nell\'entrare nella stanza' });
         }
-        
-        // Entra nella nuova stanza
-        socket.join(roomId);
-        addUserToRoom(socket.id, roomId, userName);
-        
-        // Notifica agli altri utenti nella stanza
-        const otherUsers = getOtherUsersInRoom(roomId, socket.id);
-        
-        // Invia la lista degli utenti esistenti al nuovo utente
-        socket.emit('existing-users', otherUsers.map(user => ({
-            socketId: user.socketId,
-            userName: user.userName,
-            videoEnabled: user.videoEnabled,
-            audioEnabled: user.audioEnabled
-        })));
-        
-        // Notifica agli altri utenti del nuovo arrivo
-        socket.to(roomId).emit('user-connected', {
-            socketId: socket.id,
-            userName: userName,
-            videoEnabled: true,
-            audioEnabled: true
-        });
-        
-        console.log(`🏠 ${userName} è entrato nella stanza ${roomId}`);
     });
 
     // Gestione della disconnessione
-    socket.on('disconnect', () => {
+    socket.on('disconnect', (reason) => {
+        console.log(`🔌 Utente disconnesso: ${socket.id} (${reason})`);
+        
         const user = removeUserFromRoom(socket.id);
         if (user) {
             // Notifica agli altri utenti nella stanza
-            socket.to(user.roomId).emit('user-disconnected', {
+            broadcastToRoom(user.roomId, 'user-disconnected', {
                 socketId: socket.id,
                 userName: user.userName
             });
         }
-        console.log('🔌 Utente disconnesso:', socket.id);
     });
 
-    // Gestione segnali WebRTC con destinatario specifico
+    // Gestione segnali WebRTC con validazione migliorata
     socket.on('offer', (data) => {
-        const { targetSocketId, offer, roomId } = data;
-        
-        // Verifica che entrambi gli utenti siano nella stessa stanza
-        const sender = users.get(socket.id);
-        const receiver = users.get(targetSocketId);
-        
-        if (sender && receiver && sender.roomId === receiver.roomId && sender.roomId === roomId) {
-            socket.to(targetSocketId).emit('offer', {
-                offer: offer,
-                fromSocketId: socket.id,
-                fromUserName: sender.userName
-            });
-            console.log(`📤 Offer inviato da ${sender.userName} a ${receiver.userName}`);
-        } else {
-            console.log(`❌ Offer rifiutato: utenti non nella stessa stanza`);
+        try {
+            const { targetSocketId, offer, roomId } = data;
+            
+            if (!targetSocketId || !offer || !roomId) {
+                console.log('❌ Offer con dati mancanti');
+                return;
+            }
+            
+            // Verifica che entrambi gli utenti siano nella stessa stanza
+            const sender = users.get(socket.id);
+            const receiver = users.get(targetSocketId);
+            
+            if (sender && receiver && sender.roomId === receiver.roomId && sender.roomId === roomId) {
+                socket.to(targetSocketId).emit('offer', {
+                    offer: offer,
+                    fromSocketId: socket.id,
+                    fromUserName: sender.userName
+                });
+                console.log(`📤 Offer: ${sender.userName} → ${receiver.userName}`);
+            } else {
+                console.log(`❌ Offer rifiutato: utenti non nella stessa stanza o non trovati`);
+            }
+        } catch (error) {
+            console.error('Errore offer:', error);
         }
     });
 
     socket.on('answer', (data) => {
-        const { targetSocketId, answer, roomId } = data;
-        
-        const sender = users.get(socket.id);
-        const receiver = users.get(targetSocketId);
-        
-        if (sender && receiver && sender.roomId === receiver.roomId && sender.roomId === roomId) {
-            socket.to(targetSocketId).emit('answer', {
-                answer: answer,
-                fromSocketId: socket.id,
-                fromUserName: sender.userName
-            });
-            console.log(`📤 Answer inviato da ${sender.userName} a ${receiver.userName}`);
+        try {
+            const { targetSocketId, answer, roomId } = data;
+            
+            if (!targetSocketId || !answer || !roomId) {
+                console.log('❌ Answer con dati mancanti');
+                return;
+            }
+            
+            const sender = users.get(socket.id);
+            const receiver = users.get(targetSocketId);
+            
+            if (sender && receiver && sender.roomId === receiver.roomId && sender.roomId === roomId) {
+                socket.to(targetSocketId).emit('answer', {
+                    answer: answer,
+                    fromSocketId: socket.id,
+                    fromUserName: sender.userName
+                });
+                console.log(`📤 Answer: ${sender.userName} → ${receiver.userName}`);
+            } else {
+                console.log(`❌ Answer rifiutato: utenti non nella stessa stanza o non trovati`);
+            }
+        } catch (error) {
+            console.error('Errore answer:', error);
         }
     });
 
     socket.on('ice-candidate', (data) => {
-        const { targetSocketId, candidate, roomId } = data;
-        
-        const sender = users.get(socket.id);
-        const receiver = users.get(targetSocketId);
-        
-        if (sender && receiver && sender.roomId === receiver.roomId && sender.roomId === roomId) {
-            socket.to(targetSocketId).emit('ice-candidate', {
-                candidate: candidate,
-                fromSocketId: socket.id
-            });
+        try {
+            const { targetSocketId, candidate, roomId } = data;
+            
+            if (!targetSocketId || !candidate || !roomId) {
+                return;
+            }
+            
+            const sender = users.get(socket.id);
+            const receiver = users.get(targetSocketId);
+            
+            if (sender && receiver && sender.roomId === receiver.roomId && sender.roomId === roomId) {
+                socket.to(targetSocketId).emit('ice-candidate', {
+                    candidate: candidate,
+                    fromSocketId: socket.id
+                });
+            }
+        } catch (error) {
+            console.error('Errore ice-candidate:', error);
         }
     });
 
-    // Gestione messaggi chat
+    // Gestione messaggi chat con validazione
     socket.on('chat-message', (data) => {
-        const user = users.get(socket.id);
-        if (user && user.roomId === data.roomId) {
-            socket.to(data.roomId).emit('chat-message', {
-                message: data.message,
+        try {
+            const { message, roomId } = data;
+            const user = users.get(socket.id);
+            
+            if (!user || !message || !roomId || user.roomId !== roomId) {
+                return;
+            }
+            
+            // Validazione lunghezza messaggio
+            if (message.length > 500) {
+                socket.emit('error', { message: 'Messaggio troppo lungo' });
+                return;
+            }
+            
+            // Invia a tutti gli altri utenti nella stanza
+            broadcastToRoom(roomId, 'chat-message', {
+                message: message.trim(),
                 userId: user.userName,
                 socketId: socket.id,
                 timestamp: new Date().toLocaleTimeString()
-            });
+            }, socket.id);
+            
+            console.log(`💬 ${user.userName}: ${message.substring(0, 50)}${message.length > 50 ? '...' : ''}`);
+            
+        } catch (error) {
+            console.error('Errore chat-message:', error);
         }
     });
 
     // Gestione controlli video/audio
     socket.on('toggle-video', (data) => {
-        const user = users.get(socket.id);
-        if (user && user.roomId === data.roomId) {
-            // Aggiorna lo stato dell'utente
-            user.videoEnabled = data.videoEnabled;
+        try {
+            const { videoEnabled, roomId } = data;
+            const user = users.get(socket.id);
             
-            // Notifica agli altri utenti
-            socket.to(data.roomId).emit('user-toggle-video', {
-                socketId: socket.id,
-                userName: user.userName,
-                videoEnabled: data.videoEnabled
-            });
+            if (user && user.roomId === roomId && typeof videoEnabled === 'boolean') {
+                // Aggiorna lo stato dell'utente
+                user.videoEnabled = videoEnabled;
+                
+                // Notifica agli altri utenti
+                broadcastToRoom(roomId, 'user-toggle-video', {
+                    socketId: socket.id,
+                    userName: user.userName,
+                    videoEnabled: videoEnabled
+                }, socket.id);
+                
+                console.log(`📹 ${user.userName} video: ${videoEnabled ? 'ON' : 'OFF'}`);
+            }
+        } catch (error) {
+            console.error('Errore toggle-video:', error);
         }
     });
 
     socket.on('toggle-audio', (data) => {
-        const user = users.get(socket.id);
-        if (user && user.roomId === data.roomId) {
-            // Aggiorna lo stato dell'utente
-            user.audioEnabled = data.audioEnabled;
+        try {
+            const { audioEnabled, roomId } = data;
+            const user = users.get(socket.id);
             
-            // Notifica agli altri utenti
-            socket.to(data.roomId).emit('user-toggle-audio', {
-                socketId: socket.id,
-                userName: user.userName,
-                audioEnabled: data.audioEnabled
-            });
+            if (user && user.roomId === roomId && typeof audioEnabled === 'boolean') {
+                // Aggiorna lo stato dell'utente
+                user.audioEnabled = audioEnabled;
+                
+                // Notifica agli altri utenti
+                broadcastToRoom(roomId, 'user-toggle-audio', {
+                    socketId: socket.id,
+                    userName: user.userName,
+                    audioEnabled: audioEnabled
+                }, socket.id);
+                
+                console.log(`🎤 ${user.userName} audio: ${audioEnabled ? 'ON' : 'OFF'}`);
+            }
+        } catch (error) {
+            console.error('Errore toggle-audio:', error);
         }
     });
 
     // Nuovo evento per ottenere info sulla stanza
     socket.on('get-room-info', (roomId) => {
-        const usersInRoom = getUsersInRoom(roomId);
-        socket.emit('room-info', {
-            roomId: roomId,
-            userCount: usersInRoom.length,
-            users: usersInRoom.map(user => ({
-                socketId: user.socketId,
-                userName: user.userName,
-                videoEnabled: user.videoEnabled,
-                audioEnabled: user.audioEnabled
-            }))
-        });
+        try {
+            const usersInRoom = getUsersInRoom(roomId);
+            socket.emit('room-info', {
+                roomId: roomId,
+                userCount: usersInRoom.length,
+                users: usersInRoom.map(user => ({
+                    socketId: user.socketId,
+                    userName: user.userName,
+                    videoEnabled: user.videoEnabled,
+                    audioEnabled: user.audioEnabled,
+                    joinedAt: user.joinedAt
+                }))
+            });
+        } catch (error) {
+            console.error('Errore get-room-info:', error);
+        }
+    });
+
+    // Gestione errori generici
+    socket.on('error', (error) => {
+        console.error('Errore socket:', error);
     });
 });
 
-// Endpoint per statistiche (opzionale)
+// Endpoint per statistiche (migliorato)
 app.get('/stats', (req, res) => {
-    res.json({
-        totalRooms: rooms.size,
-        totalUsers: users.size,
-        rooms: Array.from(rooms.entries()).map(([roomId, userSet]) => ({
-            roomId,
-            userCount: userSet.size,
-            users: Array.from(userSet).map(socketId => {
-                const user = users.get(socketId);
-                return user ? {
-                    userName: user.userName,
-                    socketId: user.socketId
-                } : null;
-            }).filter(Boolean)
-        }))
+    try {
+        const stats = {
+            totalRooms: rooms.size,
+            totalUsers: users.size,
+            serverUptime: process.uptime(),
+            timestamp: new Date().toISOString(),
+            rooms: Array.from(rooms.entries()).map(([roomId, userSet]) => ({
+                roomId,
+                userCount: userSet.size,
+                users: Array.from(userSet).map(socketId => {
+                    const user = users.get(socketId);
+                    return user ? {
+                        userName: user.userName,
+                        socketId: user.socketId,
+                        videoEnabled: user.videoEnabled,
+                        audioEnabled: user.audioEnabled,
+                        joinedAt: user.joinedAt
+                    } : null;
+                }).filter(Boolean)
+            }))
+        };
+        
+        res.json(stats);
+    } catch (error) {
+        console.error('Errore stats:', error);
+        res.status(500).json({ error: 'Errore interno del server' });
+    }
+});
+
+// Endpoint per la salute del server
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'OK', 
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime()
+    });
+});
+
+// Gestione errori del server
+server.on('error', (error) => {
+    console.error('Errore server:', error);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('🛑 SIGTERM ricevuto, chiudendo il server...');
+    server.close(() => {
+        console.log('👋 Server chiuso');
+        process.exit(0);
+    });
+});
+
+process.on('SIGINT', () => {
+    console.log('🛑 SIGINT ricevuto, chiudendo il server...');
+    server.close(() => {
+        console.log('👋 Server chiuso');
+        process.exit(0);
     });
 });
 
 server.listen(PORT, () => {
-    console.log(`🚀 Server in esecuzione su porta ${PORT}`);
-    console.log(`📱 Apri: http://localhost:${PORT}`);
+    console.log(`🚀 Server VideoChat Multi-Utente in esecuzione`);
+    console.log(`📱 URL locale: http://localhost:${PORT}`);
     console.log(`📊 Statistiche: http://localhost:${PORT}/stats`);
+    console.log(`🏥 Health Check: http://localhost:${PORT}/health`);
+    console.log(`🌐 Porta: ${PORT}`);
 });
