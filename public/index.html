@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VideoChat - Skype Clone</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📞</text></svg>">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1>📞 VideoChat</h1>
+                <div class="connection-status" id="connectionStatus">
+                    <span class="status-indicator offline"></span>
+                    <span class="status-text">Offline</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Join Room Section -->
+            <div class="join-section" id="joinSection">
+                <div class="join-card">
+                    <h2>🏠 Entra in una Stanza</h2>
+                    <p>Crea o inserisci l'ID della stanza per iniziare la videochiamata</p>
+                    
+                    <div class="input-group">
+                        <input type="text" id="roomInput" placeholder="ID Stanza (es: mia-stanza-2024)" maxlength="50">
+                        <input type="text" id="userNameInput" placeholder="Il tuo nome" maxlength="30">
+                    </div>
+                    
+                    <div class="button-group">
+                        <button class="btn btn-primary" onclick="joinRoom()">
+                            🚪 Entra nella Stanza
+                        </button>
+                        <button class="btn btn-secondary" onclick="generateRoomId()">
+                            🎲 Genera ID Casuale
+                        </button>
+                    </div>
+
+                    <div class="info-card">
+                        <h3>💡 Come funziona:</h3>
+                        <ol>
+                            <li>Inserisci un ID per la stanza</li>
+                            <li>Condividi l'ID con chi vuoi chiamare</li>
+                            <li>Entrambi entrate nella stessa stanza</li>
+                            <li>Iniziate la videochiamata!</li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Video Call Section -->
+            <div class="call-section" id="callSection" style="display: none;">
+                <div class="video-container">
+                    <!-- Video Locale -->
+                    <div class="video-wrapper local-video">
+                        <video id="localVideo" autoplay muted playsinline></video>
+                        <div class="video-overlay">
+                            <span class="video-label">Tu</span>
+                            <div class="video-controls-overlay">
+                                <span class="control-indicator" id="localVideoIndicator">📹</span>
+                                <span class="control-indicator" id="localAudioIndicator">🎤</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Video Remoto -->
+                    <div class="video-wrapper remote-video">
+                        <video id="remoteVideo" autoplay playsinline></video>
+                        <div class="video-overlay">
+                            <span class="video-label" id="remoteUserName">In attesa...</span>
+                            <div class="video-controls-overlay">
+                                <span class="control-indicator" id="remoteVideoIndicator">📹</span>
+                                <span class="control-indicator" id="remoteAudioIndicator">🎤</span>
+                            </div>
+                        </div>
+                        <div class="waiting-message" id="waitingMessage">
+                            <div class="spinner"></div>
+                            <p>In attesa di altri partecipanti...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Controls -->
+                <div class="controls-bar">
+                    <div class="controls-group">
+                        <button class="control-btn" id="toggleVideoBtn" onclick="toggleVideo()">
+                            <span class="btn-icon">📹</span>
+                            <span class="btn-text">Video</span>
+                        </button>
+                        
+                        <button class="control-btn" id="toggleAudioBtn" onclick="toggleAudio()">
+                            <span class="btn-icon">🎤</span>
+                            <span class="btn-text">Audio</span>
+                        </button>
+                        
+                        <button class="control-btn danger" onclick="endCall()">
+                            <span class="btn-icon">📞</span>
+                            <span class="btn-text">Termina</span>
+                        </button>
+                        
+                        <button class="control-btn" onclick="toggleChat()">
+                            <span class="btn-icon">💬</span>
+                            <span class="btn-text">Chat</span>
+                        </button>
+                        
+                        <button class="control-btn" onclick="toggleFullscreen()">
+                            <span class="btn-icon">🔲</span>
+                            <span class="btn-text">Schermo</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Chat Sidebar -->
+                <div class="chat-sidebar" id="chatSidebar">
+                    <div class="chat-header">
+                        <h3>💬 Chat</h3>
+                        <button class="close-chat" onclick="toggleChat()">×</button>
+                    </div>
+                    <div class="chat-messages" id="chatMessages"></div>
+                    <div class="chat-input-group">
+                        <input type="text" id="chatInput" placeholder="Scrivi un messaggio..." maxlength="500">
+                        <button onclick="sendMessage()">📤</button>
+                    </div>
+                </div>
+
+                <!-- Room Info -->
+                <div class="room-info">
+                    <span class="room-id">🏠 Stanza: <strong id="currentRoomId"></strong></span>
+                    <button class="btn-copy" onclick="copyRoomId()">📋 Copia</button>
+                </div>
+            </div>
+        </main>
+
+        <!-- Notifications -->
+        <div class="notification" id="notification"></div>
+    </div>
+
+    <!-- Socket.IO -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>

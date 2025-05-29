@@ -1,0 +1,20 @@
+{
+    "name": "videochat-skype",
+    "version": "1.0.0",
+    "description": "Applicazione VideoChat tipo Skype",
+    "main": "server.js",
+    "scripts": {
+      "start": "node server.js",
+      "dev": "node server.js"
+    },
+    "keywords": ["videochat", "webrtc", "skype", "socket.io"],
+    "author": "Tu",
+    "license": "MIT",
+    "dependencies": {
+      "express": "^4.18.2",
+      "socket.io": "^4.7.2"
+    },
+    "engines": {
+      "node": ">=14.0.0"
+    }
+  }
