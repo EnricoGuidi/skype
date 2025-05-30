@@ -666,4 +666,222 @@ function sendMessage() {
     const message = chatInput.value.trim();
     if (!message || !currentRoomId) return;
     
-    displayChatMessage(message, 'Tu', new Date().to
+    displayChatMessage(message, 'Tu', new Date().toLocaleTimeString(), true);
+    
+    socket.emit('chat-message', {
+        roomId: currentRoomId,
+        message: message,
+        userName: currentUserName
+    });
+    
+    chatInput.value = '';
+}
+
+function displayChatMessage(message, userName, timestamp, isOwn) {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `chat-message ${isOwn ? 'own' : 'other'}`;
+    
+    messageDiv.innerHTML = `
+        <div class="message-header">
+            <span class="message-user">${userName}</span>
+            <span class="message-time">${timestamp}</span>
+        </div>
+        <div class="message-text">${escapeHtml(message)}</div>
+    `;
+    
+    chatMessages.appendChild(messageDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    
+    if (!isChatOpen && !isOwn) {
+        showNotification(`💬 ${userName}: ${message.substring(0, 50)}${message.length > 50 ? '...' : ''}`, 'info');
+    }
+}
+
+function updateChatBadge() {
+    const badge = document.getElementById('chatBadge');
+    if (unreadMessages > 0) {
+        badge.textContent = unreadMessages > 99 ? '99+' : unreadMessages;
+        badge.style.display = 'block';
+    } else {
+        badge.style.display = 'none';
+    }
+}
+
+// Funzioni utility
+function generateRoomId() {
+    const adjectives = ['blu', 'rosso', 'verde', 'giallo', 'viola', 'arancione', 'silver', 'gold'];
+    const nouns = ['casa', 'stanza', 'sala', 'spazio', 'luogo', 'mondo', 'team', 'gruppo'];
+    const numbers = Math.floor(Math.random() * 10000);
+    
+    const roomId = `${adjectives[Math.floor(Math.random() * adjectives.length)]}-${nouns[Math.floor(Math.random() * nouns.length)]}-${numbers}`;
+    document.getElementById('roomInput').value = roomId;
+}
+
+function copyRoomId() {
+    if (currentRoomId) {
+        navigator.clipboard.writeText(currentRoomId).then(() => {
+            showNotification('📋 ID stanza copiato!', 'success');
+        }).catch(() => {
+            showNotification('❌ Impossibile copiare', 'error');
+        });
+    }
+}
+
+function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(err => {
+            console.log('Errore fullscreen:', err);
+        });
+    } else {
+        document.exitFullscreen();
+    }
+}
+
+function escapeHtml(text) {
+    const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+    };
+    return text.replace(/[&<>"']/g, m => map[m]);
+}
+
+// Funzioni UI
+function updateConnectionStatus(connected) {
+    const statusIndicator = connectionStatus.querySelector('.status-indicator');
+    const statusText = connectionStatus.querySelector('.status-text');
+    
+    if (connected) {
+        statusIndicator.className = 'status-indicator online';
+        statusText.textContent = 'Online';
+    } else {
+        statusIndicator.className = 'status-indicator offline';
+        statusText.textContent = 'Offline';
+    }
+}
+
+function showNotification(message, type = 'info') {
+    notification.textContent = message;
+    notification.className = `notification show ${type}`;
+    
+    setTimeout(() => {
+        notification.classList.remove('show');
+    }, 4000);
+}
+
+function updateLocalVideoIndicator(enabled) {
+    const indicator = document.getElementById('localVideoIndicator');
+    indicator.classList.toggle('disabled', !enabled);
+}
+
+function updateLocalAudioIndicator(enabled) {
+    const indicator = document.getElementById('localAudioIndicator');
+    indicator.classList.toggle('disabled', !enabled);
+}
+
+function updateUserVideoStatus(socketId, enabled) {
+    const user = connectedUsers.get(socketId);
+    if (user) {
+        user.videoEnabled = enabled;
+        
+        // Aggiorna indicatore video
+        const indicator = document.getElementById(`video-indicator-${socketId}`);
+        if (indicator) {
+            indicator.classList.toggle('disabled', !enabled);
+        }
+        
+        // Aggiorna status nella lista partecipanti
+        updateParticipantStatus(socketId, 'video', enabled);
+    }
+}
+
+function updateUserAudioStatus(socketId, enabled) {
+    const user = connectedUsers.get(socketId);
+    if (user) {
+        user.audioEnabled = enabled;
+        
+        // Aggiorna indicatore audio
+        const indicator = document.getElementById(`audio-indicator-${socketId}`);
+        if (indicator) {
+            indicator.classList.toggle('disabled', !enabled);
+        }
+        
+        // Aggiorna status nella lista partecipanti
+        updateParticipantStatus(socketId, 'audio', enabled);
+    }
+}
+
+function updateUserScreenShare(socketId, isSharing) {
+    const indicator = document.getElementById(`screen-indicator-${socketId}`);
+    if (indicator) {
+        indicator.style.display = isSharing ? 'flex' : 'none';
+    }
+    
+    if (isSharing) {
+        showNotification(`🖥️ ${connectedUsers.get(socketId)?.userName || 'Utente'} sta condividendo lo schermo`, 'info');
+    }
+}
+
+function updateParticipantStatus(socketId, type, enabled) {
+    const statusIcon = document.getElementById(`participant-${type}-${socketId}`);
+    if (statusIcon) {
+        statusIcon.classList.toggle('disabled', !enabled);
+    }
+}
+
+// Gestione riconnessione
+let reconnectInterval;
+
+socket.on('disconnect', () => {
+    showNotification('⚠️ Connessione persa, tentativo di riconnessione...', 'error');
+    
+    reconnectInterval = setInterval(() => {
+        if (socket.connected) {
+            clearInterval(reconnectInterval);
+            if (currentRoomId && currentUserName) {
+                showNotification('✅ Riconnesso! Rientrando nella stanza...', 'success');
+                socket.emit('join-room', currentRoomId, currentUserName);
+            }
+        }
+    }, 3000);
+});
+
+// Statistiche chiamata
+let statsInterval;
+
+function startCallStats() {
+    statsInterval = setInterval(async () => {
+        for (const [socketId, pc] of peerConnections) {
+            try {
+                const stats = await pc.getStats();
+                stats.forEach(report => {
+                    if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                        const fps = report.framesPerSecond;
+                        const bitrate = report.bytesReceived;
+                        console.log(`📊 Stats ${socketId}: ${fps} FPS, ${bitrate} bytes`);
+                    }
+                });
+            } catch (error) {
+                console.error('Errore statistiche:', error);
+            }
+        }
+    }, 5000);
+}
+
+function stopCallStats() {
+    if (statsInterval) {
+        clearInterval(statsInterval);
+    }
+}
+
+// Avvia statistiche quando inizia la chiamata
+socket.on('existing-users', () => {
+    startCallStats();
+});
+
+// Ferma statistiche quando termina la chiamata
+window.addEventListener('beforeunload', () => {
+    stopCallStats();
+});
