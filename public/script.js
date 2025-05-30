@@ -68,24 +68,31 @@ function initializeSocketConnection() {
     });
     
     // Eventi WebRTC multi-utente
-    socket.on('existing-users', (users) => {
+    socket.on('existing-users', async (users) => {
         console.log('👥 Utenti esistenti nella stanza:', users);
         
+        // Aspetta un momento per assicurarsi che lo stream locale sia pronto
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
         // Crea connessioni peer con tutti gli utenti esistenti
-        users.forEach(user => {
+        for (const user of users) {
             addUserToInterface(user);
-            createPeerConnection(user.socketId, true);
-        });
+            await createPeerConnection(user.socketId, true);
+        }
         
         updateParticipantsCount();
     });
     
-    socket.on('user-connected', (userData) => {
+    socket.on('user-connected', async (userData) => {
         console.log('👋 Nuovo utente connesso:', userData);
         showNotification(`👋 ${userData.userName} si è unito!`, 'success');
         
         addUserToInterface(userData);
-        createPeerConnection(userData.socketId, false);
+        
+        // Aspetta un momento prima di creare la connessione
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await createPeerConnection(userData.socketId, false);
+        
         updateParticipantsCount();
     });
     
@@ -100,7 +107,14 @@ function initializeSocketConnection() {
     
     socket.on('offer', async (data) => {
         console.log('📥 Ricevuto offer da:', data.fromUserName);
-        const peerConnection = peerConnections.get(data.fromSocketId);
+        
+        let peerConnection = peerConnections.get(data.fromSocketId);
+        if (!peerConnection) {
+            // Crea la peer connection se non esiste
+            await createPeerConnection(data.fromSocketId, false);
+            peerConnection = peerConnections.get(data.fromSocketId);
+        }
+        
         if (peerConnection) {
             await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
             await createAnswer(data.fromSocketId);
@@ -118,7 +132,11 @@ function initializeSocketConnection() {
     socket.on('ice-candidate', async (data) => {
         const peerConnection = peerConnections.get(data.fromSocketId);
         if (peerConnection && data.candidate) {
-            await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+            try {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+            } catch (error) {
+                console.error('Errore aggiunta ICE candidate:', error);
+            }
         }
     });
     
@@ -273,10 +291,11 @@ async function createPeerConnection(remoteSocketId, shouldCreateOffer) {
     const peerConnection = new RTCPeerConnection(configuration);
     peerConnections.set(remoteSocketId, peerConnection);
     
-    // Aggiungi stream locale
+    // Aggiungi stream locale se presente
     if (localStream) {
         localStream.getTracks().forEach(track => {
             peerConnection.addTrack(track, localStream);
+            console.log(`📤 Aggiunto track ${track.kind} alla peer connection ${remoteSocketId}`);
         });
     }
     
@@ -290,13 +309,20 @@ async function createPeerConnection(remoteSocketId, shouldCreateOffer) {
     // Gestisci stream remoto
     peerConnection.ontrack = (event) => {
         console.log('🎥 Ricevuto stream remoto da:', remoteSocketId);
-        const remoteStream = event.streams[0];
-        remoteStreams.set(remoteSocketId, remoteStream);
+        console.log('Track ricevuto:', event.track.kind);
         
-        // Assegna stream al video element
-        const videoElement = videoElements.get(remoteSocketId);
-        if (videoElement) {
-            videoElement.srcObject = remoteStream;
+        const remoteStream = event.streams[0];
+        if (remoteStream) {
+            remoteStreams.set(remoteSocketId, remoteStream);
+            
+            // Assegna stream al video element
+            const videoElement = videoElements.get(remoteSocketId);
+            if (videoElement) {
+                videoElement.srcObject = remoteStream;
+                console.log(`✅ Stream assegnato al video element ${remoteSocketId}`);
+            } else {
+                console.error(`❌ Video element non trovato per ${remoteSocketId}`);
+            }
         }
         
         // Prima connessione stabilita
@@ -325,44 +351,63 @@ async function createPeerConnection(remoteSocketId, shouldCreateOffer) {
         }
     };
     
+    // Gestisci stato ICE
+    peerConnection.oniceconnectionstatechange = () => {
+        console.log(`Stato ICE con ${remoteSocketId}:`, peerConnection.iceConnectionState);
+    };
+    
     // Crea offer se richiesto
     if (shouldCreateOffer) {
         await createOffer(remoteSocketId);
     }
+    
+    return peerConnection;
 }
 
 async function createOffer(targetSocketId) {
     const peerConnection = peerConnections.get(targetSocketId);
     if (!peerConnection) return;
     
-    const offer = await peerConnection.createOffer({
-        offerToReceiveVideo: true,
-        offerToReceiveAudio: true
-    });
-    await peerConnection.setLocalDescription(offer);
+    console.log('📤 Creando offer per:', targetSocketId);
     
-    socket.emit('offer', {
-        roomId: currentRoomId,
-        targetSocketId: targetSocketId,
-        offer: offer
-    });
+    try {
+        const offer = await peerConnection.createOffer({
+            offerToReceiveVideo: true,
+            offerToReceiveAudio: true
+        });
+        await peerConnection.setLocalDescription(offer);
+        
+        socket.emit('offer', {
+            roomId: currentRoomId,
+            targetSocketId: targetSocketId,
+            offer: offer
+        });
+    } catch (error) {
+        console.error('Errore creazione offer:', error);
+    }
 }
 
 async function createAnswer(targetSocketId) {
     const peerConnection = peerConnections.get(targetSocketId);
     if (!peerConnection) return;
     
-    const answer = await peerConnection.createAnswer();
-    await peerConnection.setLocalDescription(answer);
+    console.log('📤 Creando answer per:', targetSocketId);
     
-    socket.emit('answer', {
-        roomId: currentRoomId,
-        targetSocketId: targetSocketId,
-        answer: answer
-    });
-}
-
-function closePeerConnection(socketId) {
+    try {
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        
+        javascript       socket.emit('answer', {
+            roomId: currentRoomId,
+            targetSocketId: targetSocketId,
+            answer: answer
+        });
+    } catch (error) {
+        console.error('Errore creazione answer:', error);
+    }
+ }
+ 
+ function closePeerConnection(socketId) {
     const peerConnection = peerConnections.get(socketId);
     if (peerConnection) {
         peerConnection.close();
@@ -370,9 +415,9 @@ function closePeerConnection(socketId) {
     }
     
     remoteStreams.delete(socketId);
-}
-
-function cleanupAllPeerConnections() {
+ }
+ 
+ function cleanupAllPeerConnections() {
     peerConnections.forEach((pc) => {
         pc.close();
     });
@@ -385,10 +430,10 @@ function cleanupAllPeerConnections() {
     remoteVideos.forEach(video => video.remove());
     
     updateVideoGrid();
-}
-
-// Setup Event Listeners
-function setupEventListeners() {
+ }
+ 
+ // Setup Event Listeners
+ function setupEventListeners() {
     document.getElementById('roomInput').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') joinRoom();
     });
@@ -415,10 +460,10 @@ function setupEventListeners() {
     window.addEventListener('resize', () => {
         updateVideoGrid();
     });
-}
-
-// Funzioni principali
-async function joinRoom() {
+ }
+ 
+ // Funzioni principali
+ async function joinRoom() {
     const roomInput = document.getElementById('roomInput');
     const userNameInput = document.getElementById('userNameInput');
     const roomId = roomInput.value.trim();
@@ -438,7 +483,7 @@ async function joinRoom() {
         currentRoomId = roomId;
         currentUserName = userName;
         
-        // Ottieni stream locale
+        // Ottieni stream locale PRIMA di unirsi alla stanza
         localStream = await navigator.mediaDevices.getUserMedia({
             video: {
                 width: { ideal: 1280 },
@@ -454,16 +499,12 @@ async function joinRoom() {
         
         localVideo.srcObject = localStream;
         
-        // Unisciti alla stanza
-        socket.emit('join-room', roomId, userName);
-        
         // Mostra sezione chiamata
         joinSection.style.display = 'none';
         callSection.style.display = 'flex';
         
         // Aggiorna UI
         document.getElementById('currentRoomId').textContent = roomId;
-        showNotification(`🏠 Connesso alla stanza: ${roomId}`, 'success');
         
         // Aggiungi se stesso alla lista partecipanti
         addParticipantToList({
@@ -475,14 +516,22 @@ async function joinRoom() {
         
         updateParticipantsCount();
         
+        // Aspetta che lo stream sia completamente inizializzato
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // ORA unisciti alla stanza
+        socket.emit('join-room', roomId, userName);
+        
+        showNotification(`🏠 Connesso alla stanza: ${roomId}`, 'success');
+        
     } catch (error) {
         console.error('Errore nell\'entrare nella stanza:', error);
         showNotification('❌ Errore nell\'accedere a camera/microfono. Assicurati di dare i permessi.', 'error');
     }
-}
-
-// Controlli video/audio
-function toggleVideo() {
+ }
+ 
+ // Controlli video/audio
+ function toggleVideo() {
     if (localStream) {
         const videoTrack = localStream.getVideoTracks()[0];
         if (videoTrack) {
@@ -501,9 +550,9 @@ function toggleVideo() {
             });
         }
     }
-}
-
-function toggleAudio() {
+ }
+ 
+ function toggleAudio() {
     if (localStream) {
         const audioTrack = localStream.getAudioTracks()[0];
         if (audioTrack) {
@@ -522,10 +571,10 @@ function toggleAudio() {
             });
         }
     }
-}
-
-// Screen sharing
-async function toggleScreenShare() {
+ }
+ 
+ // Screen sharing
+ async function toggleScreenShare() {
     const btn = document.getElementById('screenShareBtn');
     
     if (!isScreenSharing) {
@@ -569,9 +618,9 @@ async function toggleScreenShare() {
     } else {
         stopScreenShare();
     }
-}
-
-function stopScreenShare() {
+ }
+ 
+ function stopScreenShare() {
     if (screenStream) {
         screenStream.getTracks().forEach(track => track.stop());
         screenStream = null;
@@ -598,9 +647,9 @@ function stopScreenShare() {
         roomId: currentRoomId,
         isSharing: false
     });
-}
-
-function endCall() {
+ }
+ 
+ function endCall() {
     if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
         localStream = null;
@@ -637,19 +686,19 @@ function endCall() {
     unreadMessages = 0;
     
     showNotification('📞 Chiamata terminata', 'info');
-}
-
-// Funzioni pannello partecipanti
-function toggleParticipants() {
+ }
+ 
+ // Funzioni pannello partecipanti
+ function toggleParticipants() {
     isParticipantsPanelOpen = !isParticipantsPanelOpen;
     participantsPanel.classList.toggle('open', isParticipantsPanelOpen);
     
     const btn = document.querySelector('[onclick="toggleParticipants()"]');
     btn.classList.toggle('active', isParticipantsPanelOpen);
-}
-
-// Funzioni chat
-function toggleChat() {
+ }
+ 
+ // Funzioni chat
+ function toggleChat() {
     isChatOpen = !isChatOpen;
     chatSidebar.classList.toggle('open', isChatOpen);
     
@@ -660,9 +709,9 @@ function toggleChat() {
         unreadMessages = 0;
         updateChatBadge();
     }
-}
-
-function sendMessage() {
+ }
+ 
+ function sendMessage() {
     const message = chatInput.value.trim();
     if (!message || !currentRoomId) return;
     
@@ -675,9 +724,9 @@ function sendMessage() {
     });
     
     chatInput.value = '';
-}
-
-function displayChatMessage(message, userName, timestamp, isOwn) {
+ }
+ 
+ function displayChatMessage(message, userName, timestamp, isOwn) {
     const messageDiv = document.createElement('div');
     messageDiv.className = `chat-message ${isOwn ? 'own' : 'other'}`;
     
@@ -695,9 +744,9 @@ function displayChatMessage(message, userName, timestamp, isOwn) {
     if (!isChatOpen && !isOwn) {
         showNotification(`💬 ${userName}: ${message.substring(0, 50)}${message.length > 50 ? '...' : ''}`, 'info');
     }
-}
-
-function updateChatBadge() {
+ }
+ 
+ function updateChatBadge() {
     const badge = document.getElementById('chatBadge');
     if (unreadMessages > 0) {
         badge.textContent = unreadMessages > 99 ? '99+' : unreadMessages;
@@ -705,19 +754,19 @@ function updateChatBadge() {
     } else {
         badge.style.display = 'none';
     }
-}
-
-// Funzioni utility
-function generateRoomId() {
+ }
+ 
+ // Funzioni utility
+ function generateRoomId() {
     const adjectives = ['blu', 'rosso', 'verde', 'giallo', 'viola', 'arancione', 'silver', 'gold'];
     const nouns = ['casa', 'stanza', 'sala', 'spazio', 'luogo', 'mondo', 'team', 'gruppo'];
     const numbers = Math.floor(Math.random() * 10000);
     
     const roomId = `${adjectives[Math.floor(Math.random() * adjectives.length)]}-${nouns[Math.floor(Math.random() * nouns.length)]}-${numbers}`;
     document.getElementById('roomInput').value = roomId;
-}
-
-function copyRoomId() {
+ }
+ 
+ function copyRoomId() {
     if (currentRoomId) {
         navigator.clipboard.writeText(currentRoomId).then(() => {
             showNotification('📋 ID stanza copiato!', 'success');
@@ -725,9 +774,9 @@ function copyRoomId() {
             showNotification('❌ Impossibile copiare', 'error');
         });
     }
-}
-
-function toggleFullscreen() {
+ }
+ 
+ function toggleFullscreen() {
     if (!document.fullscreenElement) {
         document.documentElement.requestFullscreen().catch(err => {
             console.log('Errore fullscreen:', err);
@@ -735,9 +784,9 @@ function toggleFullscreen() {
     } else {
         document.exitFullscreen();
     }
-}
-
-function escapeHtml(text) {
+ }
+ 
+ function escapeHtml(text) {
     const map = {
         '&': '&amp;',
         '<': '&lt;',
@@ -746,10 +795,10 @@ function escapeHtml(text) {
         "'": '&#039;'
     };
     return text.replace(/[&<>"']/g, m => map[m]);
-}
-
-// Funzioni UI
-function updateConnectionStatus(connected) {
+ }
+ 
+ // Funzioni UI
+ function updateConnectionStatus(connected) {
     const statusIndicator = connectionStatus.querySelector('.status-indicator');
     const statusText = connectionStatus.querySelector('.status-text');
     
@@ -760,28 +809,28 @@ function updateConnectionStatus(connected) {
         statusIndicator.className = 'status-indicator offline';
         statusText.textContent = 'Offline';
     }
-}
-
-function showNotification(message, type = 'info') {
+ }
+ 
+ function showNotification(message, type = 'info') {
     notification.textContent = message;
     notification.className = `notification show ${type}`;
     
     setTimeout(() => {
         notification.classList.remove('show');
     }, 4000);
-}
-
-function updateLocalVideoIndicator(enabled) {
+ }
+ 
+ function updateLocalVideoIndicator(enabled) {
     const indicator = document.getElementById('localVideoIndicator');
     indicator.classList.toggle('disabled', !enabled);
-}
-
-function updateLocalAudioIndicator(enabled) {
+ }
+ 
+ function updateLocalAudioIndicator(enabled) {
     const indicator = document.getElementById('localAudioIndicator');
     indicator.classList.toggle('disabled', !enabled);
-}
-
-function updateUserVideoStatus(socketId, enabled) {
+ }
+ 
+ function updateUserVideoStatus(socketId, enabled) {
     const user = connectedUsers.get(socketId);
     if (user) {
         user.videoEnabled = enabled;
@@ -795,9 +844,9 @@ function updateUserVideoStatus(socketId, enabled) {
         // Aggiorna status nella lista partecipanti
         updateParticipantStatus(socketId, 'video', enabled);
     }
-}
-
-function updateUserAudioStatus(socketId, enabled) {
+ }
+ 
+ function updateUserAudioStatus(socketId, enabled) {
     const user = connectedUsers.get(socketId);
     if (user) {
         user.audioEnabled = enabled;
@@ -811,9 +860,9 @@ function updateUserAudioStatus(socketId, enabled) {
         // Aggiorna status nella lista partecipanti
         updateParticipantStatus(socketId, 'audio', enabled);
     }
-}
-
-function updateUserScreenShare(socketId, isSharing) {
+ }
+ 
+ function updateUserScreenShare(socketId, isSharing) {
     const indicator = document.getElementById(`screen-indicator-${socketId}`);
     if (indicator) {
         indicator.style.display = isSharing ? 'flex' : 'none';
@@ -822,19 +871,19 @@ function updateUserScreenShare(socketId, isSharing) {
     if (isSharing) {
         showNotification(`🖥️ ${connectedUsers.get(socketId)?.userName || 'Utente'} sta condividendo lo schermo`, 'info');
     }
-}
-
-function updateParticipantStatus(socketId, type, enabled) {
+ }
+ 
+ function updateParticipantStatus(socketId, type, enabled) {
     const statusIcon = document.getElementById(`participant-${type}-${socketId}`);
     if (statusIcon) {
         statusIcon.classList.toggle('disabled', !enabled);
     }
-}
-
-// Gestione riconnessione
-let reconnectInterval;
-
-socket.on('disconnect', () => {
+ }
+ 
+ // Gestione riconnessione
+ let reconnectInterval;
+ 
+ socket.on('disconnect', () => {
     showNotification('⚠️ Connessione persa, tentativo di riconnessione...', 'error');
     
     reconnectInterval = setInterval(() => {
@@ -846,12 +895,12 @@ socket.on('disconnect', () => {
             }
         }
     }, 3000);
-});
-
-// Statistiche chiamata
-let statsInterval;
-
-function startCallStats() {
+ });
+ 
+ // Statistiche chiamata
+ let statsInterval;
+ 
+ function startCallStats() {
     statsInterval = setInterval(async () => {
         for (const [socketId, pc] of peerConnections) {
             try {
@@ -868,20 +917,20 @@ function startCallStats() {
             }
         }
     }, 5000);
-}
-
-function stopCallStats() {
+ }
+ 
+ function stopCallStats() {
     if (statsInterval) {
         clearInterval(statsInterval);
     }
-}
-
-// Avvia statistiche quando inizia la chiamata
-socket.on('existing-users', () => {
+ }
+ 
+ // Avvia statistiche quando inizia la chiamata
+ socket.on('existing-users', () => {
     startCallStats();
-});
-
-// Ferma statistiche quando termina la chiamata
-window.addEventListener('beforeunload', () => {
+ });
+ 
+ // Ferma statistiche quando termina la chiamata
+ window.addEventListener('beforeunload', () => {
     stopCallStats();
-});
+ });

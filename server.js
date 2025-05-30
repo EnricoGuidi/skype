@@ -248,7 +248,7 @@ io.on('connection', (socket) => {
     // Gestione messaggi chat con validazione
     socket.on('chat-message', (data) => {
         try {
-            const { message, roomId } = data;
+            const { message, roomId, userName } = data;
             const user = users.get(socket.id);
             
             if (!user || !message || !roomId || user.roomId !== roomId) {
@@ -264,6 +264,7 @@ io.on('connection', (socket) => {
             // Invia a tutti gli altri utenti nella stanza
             broadcastToRoom(roomId, 'chat-message', {
                 message: message.trim(),
+                userName: user.userName,
                 userId: user.userName,
                 socketId: socket.id,
                 timestamp: new Date().toLocaleTimeString()
@@ -320,6 +321,27 @@ io.on('connection', (socket) => {
             }
         } catch (error) {
             console.error('Errore toggle-audio:', error);
+        }
+    });
+
+    // Gestione screen sharing
+    socket.on('screen-share', (data) => {
+        try {
+            const { isSharing, roomId } = data;
+            const user = users.get(socket.id);
+            
+            if (user && user.roomId === roomId && typeof isSharing === 'boolean') {
+                // Notifica agli altri utenti
+                broadcastToRoom(roomId, 'user-screen-share', {
+                    socketId: socket.id,
+                    userName: user.userName,
+                    isSharing: isSharing
+                }, socket.id);
+                
+                console.log(`🖥️ ${user.userName} screen sharing: ${isSharing ? 'ON' : 'OFF'}`);
+            }
+        } catch (error) {
+            console.error('Errore screen-share:', error);
         }
     });
 
